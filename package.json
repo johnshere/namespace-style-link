@@ -9,13 +9,15 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onLanguage:vue"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "namespace-style-link.helloWorld",
-        "title": "Hello World"
+        "command": "namespace-style-link.greet",
+        "title": "namespace-style-link"
       }
     ]
   },
