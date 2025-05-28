@@ -2,9 +2,6 @@
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode';
 
-// 新增：正则匹配bem函数调用（支持bem.xxx(...)格式）
-const BEM_CALL_REGEX =
-  /bem\.\w+\(\s*['"](.*?)['"]\s*(?:,\s*['"](.*?)['"]\s*)*\)/g;
 const BEM_USE_REGEX = /(\w+)\s*=\s*useBEM\s*\(\s*['"]([^'"]+)['"]\s*\)/gi;
 
 
@@ -33,18 +30,37 @@ export function activate(context: vscode.ExtensionContext) {
       );
     }
   );
+  // 缓存每个文档是否使用了 useBEM
+  const bemFileCache = new Map<string, { bemModuleVarName: string, bemNs: string }>();
+
+  // 检查并缓存 useBEM
+  function checkAndCacheBEM(document: vscode.TextDocument) {
+    if (document.languageId !== 'vue') { return; }
+    const text = document.getText();
+    const match = BEM_USE_REGEX.exec(text);
+    if (match) {
+      bemFileCache.set(document.uri.toString(), { bemModuleVarName: match[1], bemNs: match[2] });
+    } else {
+      bemFileCache.delete(document.uri.toString());
+    }
+  }
+
+  // 激活时对已打开的文档做一次检查
+  vscode.workspace.textDocuments.forEach(checkAndCacheBEM);
+
+  // 监听新打开的文档
+  vscode.workspace.onDidOpenTextDocument(checkAndCacheBEM);
 
   // 新增：注册Vue语言的Hover Provider
   const hoverDisposable = vscode.languages.registerHoverProvider('vue', {
     provideHover(document, position, token) {
       // 检测是否存在 useBEM 函数调用
-      const text = document.getText();
-      const result = BEM_USE_REGEX.exec(text) || [];
-      const bemModuleVarName = result[1];
-      const bemNs = result[2];
-      if (!bemModuleVarName || !bemNs) {
-        return;
-      }
+      // 优先用缓存
+      const bemInfo = bemFileCache.get(document.uri.toString());
+      if (!bemInfo) { return; }
+
+      const bemModuleVarName = bemInfo.bemModuleVarName;
+      const bemNs = bemInfo.bemNs;
 
       // 判断hover选中的是否是BEM函数的调用，并获取，例如：bem.b('block') / bem.e('element') / bem.m('modifier')
       const line = document.lineAt(position.line).text;
@@ -55,16 +71,30 @@ export function activate(context: vscode.ExtensionContext) {
       }
 
       // 查找最近的 BEM 函数调用，截取hover位置之前的全部内容
-      // const textBeforeHover = text.substring(0, document.offsetAt(position));
+      // const text = document.getText();
+      // let textBeforeHover = text.substring(0, document.offsetAt(position));
+      // textBeforeHover = textBeforeHover.replace(line.substring(position.character), '');
       // const lastBEM = findLastBEM(textBeforeHover, bemModuleVarName);
 
       // 需要获取调用的函数名，例如：b、e、m
-      const lineTextBeforeHover = line.substring(0, document.offsetAt(position));
-      const bemCallRegex = new RegExp(
-        `\\b${bemModuleVarName}\\.(b|e|m)\\(\\s*['"]${word}['"]\\s*\\)`
-      );
-      const bemFunc = lineTextBeforeHover.match(bemCallRegex)?.[1] as 'b' | 'e' | 'm';
-      if (!bemFunc) {
+      let hoverWord = line.substring(0, position.character).split(bemModuleVarName + '.').pop() || '';
+      hoverWord = hoverWord + line.split(hoverWord).pop();
+      if (!hoverWord) {
+        return;
+      }
+      let bemFunc: FuncName;
+      if (new RegExp(`^(b|be|bm|bem)\\(\\s*['"]${word}['"]`).test(hoverWord)) {
+        bemFunc = 'b';
+      } else if (
+        new RegExp(`^(e|em)\\(\\s*['"]${word}['"]`).test(hoverWord) ||
+        new RegExp(`^(be|bem)\\(\\s*['"]([^'"]+)['"]\\s*,\\s*['"]${word}['"]`).test(hoverWord)) {
+        bemFunc = 'e';
+      } else if (
+        new RegExp(`^(m)\\(\\s*['"]${word}['"]`).test(hoverWord) ||
+        new RegExp(`^(bm|em)\\(\\s*['"]([^'"]+)['"]\\s*,\\s*['"]${word}['"]`).test(hoverWord) ||
+        new RegExp(`^(bem)\\(\\s*['"]([^'"]+)['"]\\s*,\\s*['"]([^'"]+)['"]\\s*,\\s*['"]${word}['"]`).test(hoverWord)) {
+        bemFunc = 'm';
+      } else {
         return;
       }
 
@@ -77,8 +107,16 @@ export function activate(context: vscode.ExtensionContext) {
           md.appendMarkdown(
             `[跳转到样式>](${encodeURI(`command:revealLine?${JSON.stringify({ lineNumber: i, at: 'top' })}`)})\n\n`
           );
-          const style = `${document.lineAt(i).text}\n${document.lineAt(i + 1).text}\n${document.lineAt(i + 2).text}`;
-          md.appendCodeblock(style, 'css');
+          const startSpace = document.lineAt(i).text.split('@include').shift();
+          let styles = [];
+          for (let j = 0; j < 3; j++) {
+            let sline = document.lineAt(i + j).text;
+            if (sline && startSpace) {
+              sline = sline.replace(startSpace, '');
+            }
+            styles.push(sline);
+          }
+          md.appendCodeblock(styles.join('\n'), 'css');
           md.appendMarkdown('\n\n');
         });
         md.isTrusted = true;
@@ -133,7 +171,7 @@ function findLastBEM(text: string, bemModuleVarName: string): LastBEM {
   return result;
 }
 
-type FuncName = 'b' | 'e' | 'm' | 'be' | 'bm' | 'em' | 'bem';
+type FuncName = 'b' | 'e' | 'm';
 const FUNC_NAMES: Record<FuncName, string> = {
   b: 'block',
   e: 'element',
