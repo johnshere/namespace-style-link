@@ -51,61 +51,77 @@ export function activate(context: vscode.ExtensionContext) {
   // 监听新打开的文档
   vscode.workspace.onDidOpenTextDocument(checkAndCacheBEM);
 
+  const styleMatch = (document: vscode.TextDocument, position: vscode.Position) => {
+    // 检测是否存在 useBEM 函数调用
+    // 优先用缓存
+    const bemInfo = bemFileCache.get(document.uri.toString());
+    if (!bemInfo) { return; }
+
+    const bemModuleVarName = bemInfo.bemModuleVarName;
+    const bemNs = bemInfo.bemNs;
+
+    // 判断hover选中的是否是BEM函数的调用，并获取，例如：bem.b('block') / bem.e('element') / bem.m('modifier')
+    const line = document.lineAt(position.line).text;
+
+    const word = getHoverWord(line, position);
+    if (!word) {
+      return;
+    }
+
+    // 查找最近的 BEM 函数调用，截取hover位置之前的全部内容
+    // const text = document.getText();
+    // let textBeforeHover = text.substring(0, document.offsetAt(position));
+    // textBeforeHover = textBeforeHover.replace(line.substring(position.character), '');
+    // const lastBEM = findLastBEM(textBeforeHover, bemModuleVarName);
+
+    // 需要获取调用的函数名，例如：b、e、m
+    let hoverWord = line.substring(0, position.character).split(bemModuleVarName + '.').pop() || '';
+    hoverWord = hoverWord + line.split(hoverWord).pop();
+    if (!hoverWord) {
+      return;
+    }
+    let bemFunc: FuncName;
+    if (new RegExp(`^(b|be|bm|bem)\\(\\s*['"]${word}['"]`).test(hoverWord)) {
+      bemFunc = 'b';
+    } else if (
+      new RegExp(`^(e|em)\\(\\s*['"]${word}['"]`).test(hoverWord) ||
+      new RegExp(`^(be|bem)\\(\\s*['"]([^'"]+)['"]\\s*,\\s*['"]${word}['"]`).test(hoverWord)) {
+      bemFunc = 'e';
+    } else if (
+      new RegExp(`^(m)\\(\\s*['"]${word}['"]`).test(hoverWord) ||
+      new RegExp(`^(bm|em)\\(\\s*['"]([^'"]+)['"]\\s*,\\s*['"]${word}['"]`).test(hoverWord) ||
+      new RegExp(`^(bem)\\(\\s*['"]([^'"]+)['"]\\s*,\\s*['"]([^'"]+)['"]\\s*,\\s*['"]${word}['"]`).test(hoverWord)) {
+      bemFunc = 'm';
+    } else {
+      return;
+    }
+
+    // 在<style>标签中查找匹配的CSS选择器
+    return findMatchedStyles(document, bemFunc, word);
+  };
+
+  const definitionDisposable = vscode.languages.registerDefinitionProvider('vue', {
+    provideDefinition(document, position, token) {
+      const matchedRules = styleMatch(document, position);
+      if (matchedRules && matchedRules.length > 0) {
+        // 跳转到第一个匹配的 style 行
+        const targetLine = matchedRules[0];
+        return new vscode.Location(document.uri, new vscode.Position(targetLine, 0));
+      }
+      return;
+    }
+  });
   // 新增：注册Vue语言的Hover Provider
   const hoverDisposable = vscode.languages.registerHoverProvider('vue', {
     provideHover(document, position, token) {
-      // 检测是否存在 useBEM 函数调用
-      // 优先用缓存
-      const bemInfo = bemFileCache.get(document.uri.toString());
-      if (!bemInfo) { return; }
 
-      const bemModuleVarName = bemInfo.bemModuleVarName;
-      const bemNs = bemInfo.bemNs;
+      const matchedRules = styleMatch(document, position);
 
-      // 判断hover选中的是否是BEM函数的调用，并获取，例如：bem.b('block') / bem.e('element') / bem.m('modifier')
-      const line = document.lineAt(position.line).text;
-
-      const word = getHoverWord(line, position);
-      if (!word) {
-        return;
-      }
-
-      // 查找最近的 BEM 函数调用，截取hover位置之前的全部内容
-      // const text = document.getText();
-      // let textBeforeHover = text.substring(0, document.offsetAt(position));
-      // textBeforeHover = textBeforeHover.replace(line.substring(position.character), '');
-      // const lastBEM = findLastBEM(textBeforeHover, bemModuleVarName);
-
-      // 需要获取调用的函数名，例如：b、e、m
-      let hoverWord = line.substring(0, position.character).split(bemModuleVarName + '.').pop() || '';
-      hoverWord = hoverWord + line.split(hoverWord).pop();
-      if (!hoverWord) {
-        return;
-      }
-      let bemFunc: FuncName;
-      if (new RegExp(`^(b|be|bm|bem)\\(\\s*['"]${word}['"]`).test(hoverWord)) {
-        bemFunc = 'b';
-      } else if (
-        new RegExp(`^(e|em)\\(\\s*['"]${word}['"]`).test(hoverWord) ||
-        new RegExp(`^(be|bem)\\(\\s*['"]([^'"]+)['"]\\s*,\\s*['"]${word}['"]`).test(hoverWord)) {
-        bemFunc = 'e';
-      } else if (
-        new RegExp(`^(m)\\(\\s*['"]${word}['"]`).test(hoverWord) ||
-        new RegExp(`^(bm|em)\\(\\s*['"]([^'"]+)['"]\\s*,\\s*['"]${word}['"]`).test(hoverWord) ||
-        new RegExp(`^(bem)\\(\\s*['"]([^'"]+)['"]\\s*,\\s*['"]([^'"]+)['"]\\s*,\\s*['"]${word}['"]`).test(hoverWord)) {
-        bemFunc = 'm';
-      } else {
-        return;
-      }
-
-      // 在<style>标签中查找匹配的CSS选择器
-      const matchedRules = findMatchedCssRules(document, bemFunc, word);
-
-      if (matchedRules.length > 0) {
+      if (matchedRules && matchedRules.length > 0) {
         const md = new vscode.MarkdownString();
         matchedRules.forEach(i => {
           md.appendMarkdown(
-            `[跳转到样式>](${encodeURI(`command:revealLine?${JSON.stringify({ lineNumber: i, at: 'top' })}`)})\n\n`
+            `[go to style >](${encodeURI(`command:revealLine?${JSON.stringify({ lineNumber: i, at: 'top' })}`)})\n\n`
           );
           const startSpace = document.lineAt(i).text.split('@include').shift();
           let styles = [];
@@ -116,7 +132,7 @@ export function activate(context: vscode.ExtensionContext) {
             }
             styles.push(sline);
           }
-          md.appendCodeblock(styles.join('\n'), 'css');
+          md.appendCodeblock(styles.filter(Boolean).join('\n'), 'css');
           md.appendMarkdown('\n\n');
         });
         md.isTrusted = true;
@@ -126,6 +142,7 @@ export function activate(context: vscode.ExtensionContext) {
   });
 
   context.subscriptions.push(disposable);
+  context.subscriptions.push(definitionDisposable);
   context.subscriptions.push(hoverDisposable);
 }
 
@@ -178,7 +195,7 @@ const FUNC_NAMES: Record<FuncName, string> = {
   m: 'modifier',
 } as any;
 // 新增：查找匹配的CSS规则
-function findMatchedCssRules(document: vscode.TextDocument, funcName: FuncName, className: string) {
+function findMatchedStyles(document: vscode.TextDocument, funcName: FuncName, className: string) {
   const result: number[] = [];
   const mixin = `@include ${FUNC_NAMES[funcName]}(${className})`;
 
