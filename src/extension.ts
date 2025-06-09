@@ -41,8 +41,8 @@ export function activate(context: vscode.ExtensionContext) {
     if (match) {
       nsFileCache.set(document.uri.toString(), {
         nsModuleVarName: match[1],
-        nsModule: match[2] as NamespaceCache["nsModule"],
-        nsRoot: match[3],
+        nsModule: match[3] as NamespaceCache["nsModule"],
+        nsRoot: match[4],
       });
     } else {
       nsFileCache.delete(document.uri.toString());

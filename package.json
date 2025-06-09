@@ -1,7 +1,7 @@
 {
   "name": "namespace-style-link",
   "displayName": "namespace-style-link",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "jump between template and style in Vue",
   "categories": [
     "Other"
@@ -54,6 +54,7 @@
     "typescript": "^5.8.3"
   },
   "engines": {
-    "vscode": "^1.100.0"
+    "vscode": "^1.100.0",
+    "node": "^20"
   }
 }
